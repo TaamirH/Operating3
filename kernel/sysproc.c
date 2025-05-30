@@ -89,3 +89,57 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// Helper function to find process by PID
+// Note: This is a simplified version for the assignment
+struct proc*
+find_proc_by_pid(int pid)
+{
+  extern struct proc proc[NPROC];
+  
+  for(struct proc *p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->pid == pid) {
+      release(&p->lock);
+      return p;
+    }
+    release(&p->lock);
+  }
+  return 0;
+}
+
+uint64
+sys_map_shared_pages(void)
+{
+  int src_pid, dst_pid;
+  uint64 src_va, size;
+  struct proc *src_proc, *dst_proc;
+  
+  // Get arguments
+  argint(0, &src_pid);
+  argint(1, &dst_pid);
+  argaddr(2, &src_va);
+  argaddr(3, &size);
+  
+  // Find source and destination processes
+  src_proc = find_proc_by_pid(src_pid);
+  dst_proc = find_proc_by_pid(dst_pid);
+  
+  if(src_proc == 0 || dst_proc == 0) {
+    return -1; // Process not found
+  }
+  
+  return map_shared_pages(src_proc, dst_proc, src_va, size);
+}
+
+uint64
+sys_unmap_shared_pages(void)
+{
+  uint64 addr, size;
+  
+  // Get arguments
+  argaddr(0, &addr);
+  argaddr(1, &size);
+  
+  return unmap_shared_pages(myproc(), addr, size);
+}
