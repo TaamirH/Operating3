@@ -52,28 +52,28 @@ main(void)
     char *malloc_test = sbrk(1024);
     if(malloc_test != (char*)-1) {
       printf("Child: malloc after mapping works\n");
+      printf("Child size after malloc: %d\n", (char*)sbrk(0) - (char*)0);
     }
-    printf("Child size after malloc: %d\n", (char*)sbrk(0) - (char*)0);
     
     // Unmap shared memory
     if(unmap_shared_pages(shared_addr, 4096) == 0) {
       printf("Child: successfully unmapped shared memory\n");
+      printf("Child size after unmapping: %d\n", (char*)sbrk(0) - (char*)0);
     } else {
       printf("Child: failed to unmap shared memory\n");
     }
-    printf("Child size after unmapping: %d\n", (char*)sbrk(0) - (char*)0);
     
     // Test malloc after unmapping
     char *malloc_test2 = sbrk(1024);
     if(malloc_test2 != (char*)-1) {
       printf("Child: malloc after unmapping works\n");
+      printf("Child size after second malloc: %d\n", (char*)sbrk(0) - (char*)0);
     }
-    printf("Child size after second malloc: %d\n", (char*)sbrk(0) - (char*)0);
     
     exit(0);
   } else {
     // Parent process
-    sleep(1); // Let child write to memory first
+    sleep(2); // Let child write to memory first (increased sleep time)
     
     printf("Parent reading from shared buffer: '%s'\n", shared_buffer);
     
@@ -82,6 +82,7 @@ main(void)
       printf("shmem_test: SUCCESS - message correctly shared between processes\n");
     } else {
       printf("shmem_test: FAILED - message not correctly shared\n");
+      printf("Expected: '%s', Got: '%s'\n", test_message, shared_buffer);
     }
     
     wait(0); // Wait for child to finish

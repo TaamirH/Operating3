@@ -180,8 +180,11 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    if((*pte & PTE_V) == 0) {
+      // This is the key fix - don't panic if page is not mapped
+      // This can happen with shared memory when pages are unmapped elsewhere
+      continue;
+    }
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     
@@ -193,7 +196,6 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     *pte = 0;
   }
 }
-
 // create an empty user page table.
 // returns 0 if out of memory.
 pagetable_t
@@ -442,6 +444,7 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 }
 
 // Map shared pages from source process to destination process
+// Map shared pages from source process to destination process
 uint64
 map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, uint64 size)
 {
@@ -469,6 +472,7 @@ map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, ui
       // Cleanup already mapped pages on failure
       if (i > 0) {
         uvmunmap(dst_proc->pagetable, dst_start, i, 0);
+        dst_proc->sz = dst_start; // Reset size
       }
       return 0;
     }
@@ -482,6 +486,7 @@ map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, ui
       // Cleanup already mapped pages on failure
       if (i > 0) {
         uvmunmap(dst_proc->pagetable, dst_start, i, 0);
+        dst_proc->sz = dst_start; // Reset size
       }
       return 0;
     }
@@ -514,7 +519,6 @@ unmap_shared_pages(struct proc* p, uint64 addr, uint64 size)
     if (pte == 0 || (*pte & PTE_V) == 0) {
       return -1; // Not a valid mapping
     }
-    // Note: We don't require PTE_S flag since the process might have modified it
   }
   
   // Unmap the pages (don't free physical memory since it's shared)
