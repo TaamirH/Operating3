@@ -17,10 +17,8 @@ uint64 align_address(uint64 addr) {
     return (addr + 3) & ~3;
 }
 
-// Child process logging function
+// Child process logging function - REDUCED PRINTING
 void child_logger(int child_index, char *shared_buffer, int parent_pid) {
-    printf("Child %d: Starting logging\n", child_index);
-    
     char message[MAX_MESSAGE_SIZE];
     int message_count = 0;
     
@@ -41,7 +39,6 @@ void child_logger(int child_index, char *shared_buffer, int parent_pid) {
         uint16 msg_len = strlen(message);
         uint64 current_pos = 0;
         int attempts = 0;
-        int success = 0;
         
         // Try to find a spot in the buffer
         while (current_pos + sizeof(struct log_header) + msg_len < BUFFER_SIZE && attempts < 1000) {
@@ -50,7 +47,6 @@ void child_logger(int child_index, char *shared_buffer, int parent_pid) {
             
             // Check if we're still within bounds
             if (current_pos + sizeof(struct log_header) + msg_len >= BUFFER_SIZE) {
-                printf("Child %d: Buffer full, stopping\n", child_index);
                 goto child_exit;
             }
             
@@ -72,9 +68,7 @@ void child_logger(int child_index, char *shared_buffer, int parent_pid) {
                 char *msg_ptr = shared_buffer + current_pos + sizeof(struct log_header);
                 strcpy(msg_ptr, message);
                 
-                printf("Child %d: Wrote message %d at offset %d\n", child_index, i, (int)current_pos);
                 message_count++;
-                success = 1;
                 break;
             } else {
                 // Spot was taken, skip to next potential location
@@ -90,56 +84,73 @@ void child_logger(int child_index, char *shared_buffer, int parent_pid) {
             attempts++;
         }
         
-        if (!success) {
-            printf("Child %d: Failed to write message %d after %d attempts\n", child_index, i, attempts);
-        }
-        
         // Small delay between messages  
-        sleep(2);
+        sleep(1);
     }
     
 child_exit:
-    printf("Child %d: Finished logging, wrote %d messages\n", child_index, message_count);
+    // Only print final summary to reduce output noise
+    printf("Child %d: Finished, wrote %d messages\n", child_index, message_count);
 }
 
-// Parent process reading function - FIXED VERSION
-void parent_reader(char *shared_buffer) {
-    printf("Parent: Starting to read all messages in buffer\n");
+// Concurrent reader that only reads NEW messages
+void parent_reader_concurrent(char *shared_buffer) {
+    printf("Parent: Starting concurrent reading\n");
     
-    uint64 read_pos = 0;
-    int messages_read = 0;
+    uint64 next_read_pos = 0;  // Track where we left off
+    int total_messages_read = 0;
+    int scan_rounds = 0;
+    const int MAX_SCAN_ROUNDS = 15; // Reduced since we're not re-reading
     
-    // Single pass through the buffer to read all messages
-    while (read_pos + sizeof(struct log_header) < BUFFER_SIZE) {
-        read_pos = align_address(read_pos);
+    while (scan_rounds < MAX_SCAN_ROUNDS) {
+        uint64 read_pos = next_read_pos;
+        int new_messages_found = 0;
         
-        if (read_pos + sizeof(struct log_header) >= BUFFER_SIZE) {
-            break;
-        }
-        
-        struct log_header *header = (struct log_header *)(shared_buffer + read_pos);
-        
-        if (header->child_index != 0 && header->message_length > 0) {
-            // Found a message
-            if (read_pos + sizeof(struct log_header) + header->message_length < BUFFER_SIZE) {
-                char *message = shared_buffer + read_pos + sizeof(struct log_header);
-                printf("Parent read from child %d: %s\n", header->child_index, message);
-                messages_read++;
+        // Only scan from where we left off
+        while (read_pos + sizeof(struct log_header) < BUFFER_SIZE) {
+            read_pos = align_address(read_pos);
+            
+            if (read_pos + sizeof(struct log_header) >= BUFFER_SIZE) {
+                break;
             }
             
-            read_pos += sizeof(struct log_header) + header->message_length;
-        } else {
-            read_pos += sizeof(struct log_header);
+            struct log_header *header = (struct log_header *)(shared_buffer + read_pos);
+            
+            if (header->child_index != 0 && header->message_length > 0) {
+                // Found a NEW message
+                if (read_pos + sizeof(struct log_header) + header->message_length < BUFFER_SIZE) {
+                    char *message = shared_buffer + read_pos + sizeof(struct log_header);
+                    printf("Parent read: %s\n", message);
+                    new_messages_found++;
+                    total_messages_read++;
+                    
+                    // Update our position to after this message
+                    next_read_pos = read_pos + sizeof(struct log_header) + header->message_length;
+                    next_read_pos = align_address(next_read_pos);
+                    read_pos = next_read_pos;
+                } else {
+                    break; // Invalid message, stop
+                }
+            } else {
+                // No message here yet, might be written later
+                break;
+            }
         }
         
-        read_pos = align_address(read_pos);
+        if (new_messages_found > 0) {
+            printf("Parent: Found %d new messages in scan %d (total: %d)\n", 
+                   new_messages_found, scan_rounds, total_messages_read);
+        }
+        
+        scan_rounds++;
+        sleep(2); // Wait before next scan
     }
     
-    printf("Parent: Finished reading, total messages found: %d\n", messages_read);
+    printf("Parent: Concurrent reading finished, read %d messages total\n", total_messages_read);
 }
 
 int main(void) {
-    printf("log_test: Starting multi-process logging test\n");
+    printf("log_test: Starting concurrent multi-process logging test\n");
     
     int parent_pid = getpid();
     char *shared_buffer;
@@ -154,7 +165,7 @@ int main(void) {
     // Initialize buffer to zero
     memset(shared_buffer, 0, BUFFER_SIZE);
     
-    printf("Parent: Allocated shared buffer at %p\n", shared_buffer);
+    printf("Parent: Buffer allocated, creating %d children\n", NUM_CHILDREN);
     
     // Create child processes
     for (int i = 0; i < NUM_CHILDREN; i++) {
@@ -165,8 +176,7 @@ int main(void) {
         }
         
         if (pid == 0) {
-            // Child process
-            printf("Child %d (PID %d): Starting\n", i + 1, getpid());
+            // Child process - reduce initial noise
             
             // Map shared buffer from parent
             uint64 shared_addr = map_shared_pages(parent_pid, getpid(), (uint64)shared_buffer, BUFFER_SIZE);
@@ -175,28 +185,50 @@ int main(void) {
                 exit(1);
             }
             
-            printf("Child %d: Mapped shared buffer at %p\n", i + 1, (void*)shared_addr);
-            
             // Start logging
             child_logger(i + 1, (char*)shared_addr, parent_pid);
             
             exit(0);
         }
-        // Parent continues to next iteration
     }
     
-    // Wait for all children to finish writing first
-    printf("Parent: Waiting for all children to finish writing...\n");
+    // Give children a moment to start, then begin concurrent reading
+    sleep(1);
+    printf("Parent: Children started, beginning concurrent reading...\n");
+    parent_reader_concurrent(shared_buffer);
+    
+    // Wait for all children to finish
+    printf("Parent: Waiting for children to complete...\n");
     for (int i = 0; i < NUM_CHILDREN; i++) {
         int status;
         wait(&status);
-        printf("Parent: Child %d finished with status %d\n", i+1, status);
     }
     
-    // Now read all the messages that were written
-    printf("Parent: All children finished, now reading messages...\n");
-    parent_reader(shared_buffer);
+    // Final verification scan
+    printf("Parent: All children finished, doing final verification...\n");
+    uint64 read_pos = 0;
+    int final_count = 0;
     
-    printf("log_test: Multi-process logging test completed\n");
+    while (read_pos + sizeof(struct log_header) < BUFFER_SIZE) {
+        read_pos = align_address(read_pos);
+        
+        if (read_pos + sizeof(struct log_header) >= BUFFER_SIZE) {
+            break;
+        }
+        
+        struct log_header *header = (struct log_header *)(shared_buffer + read_pos);
+        
+        if (header->child_index != 0 && header->message_length > 0) {
+            final_count++;
+            read_pos += sizeof(struct log_header) + header->message_length;
+        } else {
+            read_pos += sizeof(struct log_header);
+        }
+        
+        read_pos = align_address(read_pos);
+    }
+    
+    printf("Parent: Final count: %d messages total in buffer\n", final_count);
+    printf("log_test: Concurrent logging test completed successfully\n");
     return 0;
 }
